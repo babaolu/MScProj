@@ -1,0 +1,5 @@
+*.swp
+*.msh
+*.h5
+*.xdmf
+out_*/
