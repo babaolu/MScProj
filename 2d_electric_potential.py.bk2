@@ -19,7 +19,7 @@ import ufl
 from dolfinx import fem, plot, default_scalar_type
 from dolfinx.fem import form
 from dolfinx.io import gmsh as gmshio, XDMFFile
-from dolfinx.fem.petsc import LinearProblem, NonlinearProblem
+from dolfinx.fem.petsc import LinearProblem
 from dolfinx.mesh import meshtags
 import pyvista
 
@@ -66,30 +66,35 @@ tdim = msh.topology.dim
 fdim = tdim - 1
 gdim = msh.geometry.dim
 
-V0 = fem.functionspace(msh, ("DG", 0))
-λ = fem.Function(V0)
-μ = fem.Function(V0)
+# Create arrays matching number of cells
+λ = np.zeros(msh.topology.index_map(tdim).size_local,
+        dtype=default_scalar_type)
+μ = np.zeros_like(λ)
 
 for cell_id, tag in enumerate(cell_tags.values):
     if tag == 1:
-        λ.x.array[cell_id] = λ_eco
-        μ.x.array[cell_id] = μ_eco
+        λ[cell_id] = λ_eco
+        μ[cell_id] = μ_eco
     elif tag == 2:
-        λ.x.array[cell_id] = λ_cnt
-        μ.x.array[cell_id] = μ_cnt
+        λ[cell_id] = λ_cnt
+        μ[cell_id] = μ_cnt
     else:  # All other forearm tissues rigid
-        λ.x.array[cell_id] = λ_rigid
-        μ.x.array[cell_id] = μ_rigid
+        λ[cell_id] = λ_rigid
+        μ[cell_id] = μ_rigid
+
+V0 = fem.functionspace(msh, ("DG", 0))
+λ_func = fem.Function(V0)
+μ_func = fem.Function(V0)
+λ_func.x.array[:] = λ
+μ_func.x.array[:] = μ
 
 print("Values: ", facet_tags.values)
 print("Facet dim:", facet_tags.dim)
 print(f"Whole face tag of type {facet_tags.name}=>", dir(facet_tags))
 
-print(f"Geometry dimension is {msh.geometry.dim} -> {msh.geometry.x.shape[1]}")
+print(f"Geometry dimension is {msh.geometry.dim}")
 
 V = fem.functionspace(msh, ("Lagrange", 2, (gdim, )))
-u = fem.Function(V)
-v = ufl.TestFunction(V)
 
 left_facets = facet_tags.find(11)
 right_facets = facet_tags.find(12)
@@ -98,67 +103,136 @@ left_dofs = fem.locate_dofs_topological(V, fdim, left_facets)
 right_dofs = fem.locate_dofs_topological(V, fdim, right_facets)
 
 u_left = np.array([L0 / 2, 2 * r], dtype=default_scalar_type)
-#u_left = np.array([0, 2 * r], dtype=default_scalar_type)
+#u_left = np.array([0, 0], dtype=default_scalar_type)
 u_right = np.array([-L0 / 2, 2 * r], dtype=default_scalar_type)
-#u_right = np.array([0, 2 * r], dtype=default_scalar_type)
+#u_right = np.array([-L0/2, 0], dtype=default_scalar_type)
 
 bc_left = fem.dirichletbc(u_left, left_dofs, V)
 bc_right = fem.dirichletbc(u_right, right_dofs, V)
 
 bcs = [bc_left, bc_right]
 
-def σ(u):
-    """Return an expression for the stress σ given a displacement field"""
-    return (2.0 * μ * ufl.sym(ufl.grad(u))
-        + λ * ufl.nabla_div(u) * ufl.Identity(gdim))
-
-dx = ufl.dx
 ds = ufl.Measure("ds", domain=msh, subdomain_data=facet_tags)
 
-a_bulk = ufl.inner(σ(u), ufl.grad(v)) * dx
-
-contact_tag = physical_groups["Top"].tag
+contact_tag = physical_groups["Skin_Electrode"].tag
 print("Contact_tag:", contact_tag)
 
-ds_c = ds(contact_tag)
-
-x = ufl.SpatialCoordinate(msh)
+contact_facets = facet_tags.find(contact_tag)
 R_skin = r
-center = ufl.as_vector([0.0, 0.0])
+center = np.array([0.0, 0.0])
 
-r_vec = x - center
-n = r_vec / ufl.sqrt(ufl.dot(r_vec, r_vec))
+#MeshTags for contact *domain* (value 1 indicates contact candidate facets)
+contact_values = np.ones(contact_facets.shape, dtype=np.int32)
+contact_mt = meshtags(msh, fdim, contact_facets, contact_values)
 
-gap = ufl.dot(r_vec, n) - R_skin + ufl.dot(u, n)
-gap_neg = ufl.min_value(gap, 0.0)
+#helper: UFL measure restricted to the contact tag (all contact cadidate facets)
+ds_contact_all = ufl.Measure("ds", domain=msh, subdomain_data=contact_mt)
 
-h = ufl.CellDiameter(msh)
-gamma = fem.Constant(msh, default_scalar_type(10 * E_cnt))
+# Normal on facets (UFL)
+n = ufl.FacetNormal(msh)
+x = ufl.SpatialCoordinate(msh)
 
-# --- Normal components ---
-u_n = ufl.dot(u, n)
-v_n = ufl.dot(v, n)
+def σ(u):
+    """Return an expression for the stress σ given a displacement field"""
+    return (2.0 * μ_func * ufl.sym(ufl.grad(u))
+        + λ_func * ufl.nabla_div(u) * ufl.Identity(len(u)))
 
-# --- Nitsche terms ---
-R_contact = (
-    - ufl.inner(σ(u) * n, v_n * n) * ds_c
-    - ufl.inner(σ(v) * n, gap_neg * n) * ds_c
-    + gamma / h * gap_neg * v_n * ds_c
-)
-R = a_bulk + R_contact
-J = ufl.derivative(R, u)
+u = ufl.TrialFunction(V)
+v = ufl.TestFunction(V)
+a = ufl.inner(σ(u), ufl.grad(v)) * ufl.dx
+f = fem.Constant(msh, np.array([0.0] * gdim, dtype=default_scalar_type))
+L = ufl.dot(f, v) * ufl.dx
 
-problem = NonlinearProblem(R, u, bcs=bcs, J=J, petsc_options_prefix="contact_",
-    petsc_options={ "snes_type": "newtonls", "snes_linesearch_type": "bt",
-            "snes_rtol": 1e-8, "snes_atol": 1e-8, "ksp_type": "preonly",
-            "pc_type": "lu"}
-    )
-problem.solve()
+# Initial guess (zero)
+u_k = fem.Function(V)
+u_k.x.array[:] = 0.0
+
+# Initialze lambda per candidate facet (as and array indexed by contact_facets order)
+#lambda_vals = np.zeros(contact_facets.shape[0], dtype=np.float64)
+
+# Precompute facet->vertex connectivity for centroid sampling (useful for speed)
+# Ensure connectivity exists
+if not msh.topology.index_map(fdim).size_local:
+    msh.topology.create_connectivity(fdim, 0)
+facet_to_vertices = msh.topology.connectivity(fdim, 0)
+
+# Outward normal from the skin circle 
+r_vec = x - ufl.as_vector(center)
+n_skin = r_vec / ufl.sqrt(ufl.dot(r_vec, r_vec))
+gap = ufl.dot(u_k + r_vec, n_skin) - R_skin
+g_pos = ufl.min_value(gap, 0.0)
+
+# To sample u at vertices, creat a CG1 vector function space (vertex-based)
+# interpolate/projection
+V_vert = fem.functionspace(msh, ("Lagrange", 1, (gdim, )))
+
+
+# Begin ALM iterations
+for it in range(maxiter):
+    # --- 1) Produce vertex-valued displacement u_vert from current iterate u_k ---
+    u_vert = fem.Function(V_vert)
+    try:
+        u_vert.interpolate(u_k)
+    except Exception:
+        # fallback L2 projection
+        trial = ufl.TrialFunction(V_vert)
+        test = ufl.TestFunction(V_vert)
+        a_p = ufl.inner(trial, test) * ufl.dx
+        L_p = ufl.inner(u_k, test) * ufl.dx
+        proj = LinearProblem(a_p, L_p, petsc_options={"ksp_type": "preonly", "pc_type": "lu"})
+        u_vert = proj.solve()
+    u_vert_vals = u_vert.x.array.reshape((-1, gdim))
+
+    #lambda_avg = np.mean(lambda_vals)
+    #g_avg = fem.assemble_scalar(form(gap * ds(contact_tag)))
+
+
+    #L_contact = (lambda_avg + rho * g_avg) * ufl.dot(v, n_skin) * ds(contact_tag)
+    L_contact = rho * g_pos * ufl.dot(v, n_skin) * ds(contact_tag)
+    # --- 4) assemble total problem and solve linear system ---
+    L_total = L + L_contact
     
-# final solution is u
-V_vis = fem.functionspace(msh, ("Lagrange", 1, (gdim, )))
-u_vis = fem.Function(V_vis)
-u_vis.interpolate(u) 
+    problem = LinearProblem(
+        a,
+        L_total,
+        bcs=bcs,
+        petsc_options={"ksp_type": "preonly", "pc_type": "lu"},
+        petsc_options_prefix="linear_elasticity",
+    )
+    u_new = problem.solve()
+
+    # --- 5) Update lambda per contact facet: lambda <- max(0, lambda + rho*(g - u_new·n)) ---
+    u_vert_new = fem.Function(V_vert)
+    try:
+        u_vert_new.interpolate(u_new)
+    except Exception:
+        trial = ufl.TrialFunction(V_vert)
+        test = ufl.TestFunction(V_vert)
+        a_p = ufl.inner(trial, test) * ufl.dx
+        L_p = ufl.inner(u_new, test) * ufl.dx
+        proj = LinearProblem(a_p, L_p,
+            petsc_options={"ksp_type": "preonly", "pc_type": "lu"})
+        u_vert_new = proj.solve()
+
+    u_vert_new_vals = u_vert_new.x.array.reshape((-1, gdim))
+    
+    g_val = fem.assemble_scalar(form(gap * ds(contact_tag)))
+
+    #lambda_vals[:] = np.maximum(0.0, lambda_vals + rho * g_val)
+
+    # compute convergence measure
+    du = np.linalg.norm(u_new.x.array)
+    print(f"ALM iter {it}: ||u||={du:.3e}")
+    u_k.x.array[:] = u_new.x.array[:]
+
+    if du < tol:
+        print("ALM converged.")
+        break
+
+# final solution is u_k
+u_vis = fem.Function(V_vert)
+u_vis.interpolate(u_k) 
+uh = u_k
 
 # --- Prepare displacement output (interpolate to CG1 vector space) ---
 print(f"geometry dimesion is {gdim}, with shape of {msh.geometry.x.shape}")
@@ -179,7 +253,7 @@ orig_coords = msh.geometry.x.copy()
 
 #msh.geometry.x[:] = msh.geometry.x + u_vals
 
-sigma_dev = σ(u) - (1.0 / 3) * ufl.tr(σ(u)) * ufl.Identity(len(u))
+sigma_dev = σ(uh) - (1.0 / 3) * ufl.tr(σ(uh)) * ufl.Identity(len(uh))
 sigma_vm = ufl.sqrt((3.0 / 2) * ufl.inner(sigma_dev, sigma_dev))
 
 W = fem.functionspace(msh, ("DG", 0))
@@ -198,7 +272,7 @@ with XDMFFile(msh.comm, "out_elasticity/von_mises_stress.xdmf", "w") as file:
     file.write_function(sigma_vm_h)
 
 # Create the VTK mesh from your function space
-topology, cell_types, geometry = plot.vtk_mesh(V_vis)
+topology, cell_types, geometry = plot.vtk_mesh(V_vert)
 
 # Create an unstructured grid (2D domain)
 grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)

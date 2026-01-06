@@ -112,8 +112,12 @@ gmsh.model.occ.synchronize()
 
 boundaries = gmsh.model.getBoundary([(2, tag) for tag in substrate_surfaces],
         oriented=False)
+conductor_boundaries = gmsh.model.getBoundary([(2, tag) for tag in conductor_array],
+        oriented=False)
+
 left_curves = []
 right_curves = []
+top_curves = []
 
 tol = 1e-6    # Tolerance
 
@@ -121,16 +125,27 @@ for dim, tag in boundaries:
     xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(dim,tag)
     if abs(xmin + (L0 / 2)) < tol and abs(xmax + (L0 / 2)) < tol:
         left_curves.append(tag)
-    elif abs(xmin - (L0 / 2)) < tol and abs(xmax - (L0 / 2)) < tol:
+    if abs(xmin - (L0 / 2)) < tol and abs(xmax - (L0 / 2)) < tol:
         right_curves.append(tag)
+    if abs(ymin + r) < tol and abs(ymax + r) < tol:
+        top_curves.append(tag)
+
+for dim, tag in conductor_boundaries:
+    xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(dim,tag)
+    if abs(ymin + r) < tol and abs(ymax + r) < tol:
+        top_curves.append(tag)
+
 
 if left_curves:
     gmsh.model.addPhysicalGroup(1, left_curves, name="Left")
 if right_curves:
     gmsh.model.addPhysicalGroup(1, right_curves, name="Right")
+if top_curves:
+    gmsh.model.addPhysicalGroup(1, top_curves, name="Top")
 
 print("Left curves:", left_curves)
 print("Right curves:", right_curves)
+print("Top curves:", top_curves)
 
 gmsh.model.occ.synchronize()
 
