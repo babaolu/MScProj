@@ -11,7 +11,6 @@ R_muscle = r * np.sqrt(0.612 + 0.107)
 R_fat = r * np.sqrt(0.223 + 0.612 + 0.107)
 R_skin = r
 
-
 # Band dimensions (mm)
 L0 = 2 * np.pi * 30
 t = 1		# Band thickness

@@ -133,64 +133,62 @@ print("Contact_tag:", contact_tag)
 
 ds_c = ds(contact_tag)
 
+# Cells adjacent to contact facets
+# Ensure connectivity exists
+msh.topology.create_connectivity(fdim, tdim)
+facet_to_cell = msh.topology.connectivity(fdim, tdim)
+
+contact_facets = facet_tags.find(contact_tag)
+
+# Collect all cells connected to contact facets
+contact_cells = np.unique(
+    np.hstack([facet_to_cell.links(f) for f in contact_facets])
+)
+
 x = ufl.SpatialCoordinate(msh)
 R_skin = r
 
 
 center = ufl.as_vector([0.0, 0.0])
-r_vec = x - center
 
-r_norm = ufl.sqrt(ufl.dot(r_vec, r_vec))
-n = r_vec / r_norm
+# Current configuration
+x_current = x + u
 
-# --- Normal components ---
-u_n = ufl.dot(u, n)
-v_n = ufl.dot(v, n)
+dist = ufl.sqrt(ufl.dot(x_current, x_current))
+n_contact = x_current / dist
 
-gap = r_norm - R_skin + u_n
-gap_neg = ufl.min_value(gap, 0.0)
-"""
-# Current position of the point (after deformation)
-x_current = x + u 
+# Gap (negative = penetration)
+gap = R_skin - dist
 
-# Distance of the current point from the center (0,0)
-dist_from_center = ufl.sqrt(ufl.dot(x_current, x_current))
+Vλ = fem.functionspace(msh, ("DG", 0))
+lambda_n = fem.Function(Vλ)
+lambda_n.name = "lambda_contact"
+gamma = fem.Constant(msh, default_scalar_type(1e8))
 
-# The geometric gap: (Current Radius) - (Target Radius)
-# If this is negative, we are inside the arm.
-gap = dist_from_center - R_skin 
-gap_neg = ufl.min_value(gap, 0.0)
+t_n = lambda_n + gamma * gap
 
-# Direction of the contact force (Radial outward from center)
-n_contact = x_current / dist_from_center 
-
-# The test function component in the radial direction
 v_n = ufl.dot(v, n_contact)
-"""
 
-# --- Simplified Penalty Contact ---
-# (Using pure penalty is safer for this large wrapping motion)
-h = ufl.CellDiameter(msh)
-gamma = fem.Constant(msh, default_scalar_type(5000000.0 * E_cnt))
-
-R_contact = gamma / h * gap_neg * v_n * ds_c
+R_contact = -ufl.conditional(
+    ufl.gt(gap, 0.0),
+    t_n * v_n,
+    0.0
+) * ds_c
 
 R = a_bulk + R_contact
 J = ufl.derivative(R, u)
 
 # Create a loop to apply load in 10 steps
+al_maxiter = 15
+al_tol = 1e-6
 steps = 10
 for step in range(1, steps + 1):
     fraction = step / steps
     print(f"Solving Step {step}/{steps} (Load: {fraction*100:.0f}%)")
     
     # Update BC values
-    current_left = u_left.copy()
-    current_right = u_right.copy()
-    current_left[0] = current_left[0] * fraction
-    current_right[0] = current_right[0] * fraction
-    current_left[1] = current_left[1] * (0.6 + 0.4 * fraction)
-    current_right[1] = current_right[1] * (0.6 + 0.4 * fraction)
+    current_left = u_left * fraction
+    current_right = u_right * fraction
     
     # You must update the values inside the BC objects. 
     # Since DirichletBC in dolfinx is immutable, we usually update a Function 
@@ -199,14 +197,42 @@ for step in range(1, steps + 1):
     bc_left = fem.dirichletbc(current_left, left_dofs, V)
     bc_right = fem.dirichletbc(current_right, right_dofs, V)
     bcs = [bc_left, bc_right]
-    
-    # Solve
-    problem = NonlinearProblem(R, u, bcs=bcs, J=J,
-        petsc_options_prefix="contact_",
-        petsc_options={"snes_type": "newtonls", "snes_linesearch_type": "bt", "snes_rtol": 1e-8, "snes_atol": 1e-8, "snes_stol": 1e-8, "ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps",}
+    for al_iter in range(al_maxiter):
+        print(f"  AL iteration {al_iter+1}")
+
+        problem = NonlinearProblem(
+            R, u, bcs=bcs, J=J,
+            petsc_options_prefix="contact_",
+            petsc_options={
+                "snes_type": "newtonls",
+                "snes_linesearch_type": "bt",
+                "snes_rtol": 1e-8,
+                "ksp_type": "preonly",
+                "pc_type": "lu",
+                "pc_factor_mat_solver_type": "mumps",
+            },
         )
-    problem.solve()
-    
+
+        problem.solve()
+
+        # --- Update Lagrange multiplier ---
+        gap_expr = fem.Expression(gap, Vλ.element.interpolation_points)
+        gap_h = fem.Function(Vλ)
+        gap_h.interpolate(gap_expr)
+
+        lambda_n.x.array[contact_cells] = np.maximum(
+            lambda_n.x.array[contact_cells] + gamma.value * gap_h.x.array[contact_cells],
+            0.0
+        )
+        
+        penetration = np.max(gap_h.x.array[contact_cells])
+
+        print(f"    min gap = {penetration:.3e}")
+
+        if abs(penetration) < al_tol:
+            print("    AL converged")
+            break
+        
     # Update u for the next step (Newton solver does this automatically on 'u')
     # final solution is u
     V_vis = fem.functionspace(msh, ("Lagrange", 1, (gdim, )))
