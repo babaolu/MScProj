@@ -71,10 +71,10 @@ V0 = fem.functionspace(msh, ("DG", 0))
 μ = fem.Function(V0)
 
 for cell_id, tag in enumerate(cell_tags.values):
-    if tag == 1:
+    if tag == 9:
         λ.x.array[cell_id] = λ_eco
         μ.x.array[cell_id] = μ_eco
-    elif tag == 2:
+    elif tag == 10:
         λ.x.array[cell_id] = λ_cnt
         μ.x.array[cell_id] = μ_cnt
     else:  # All other forearm tissues rigid
