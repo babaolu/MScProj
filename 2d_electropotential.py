@@ -12,6 +12,7 @@ from dolfinx.fem import (
 from dolfinx.fem.petsc import LinearProblem
 from dolfinx.io import XDMFFile, gmsh as gmshio
 from dolfinx.plot import vtk_mesh
+from dolfinx.mesh import compute_midpoints
 
 from ufl import SpatialCoordinate, TestFunction, TrialFunction, dx, grad, inner
 
@@ -19,17 +20,19 @@ from mpi4py import MPI
 
 import numpy as np
 import pyvista
+from pathlib import Path
 
 msh_file = "2d_wrapped.msh"
 
 comm = MPI.COMM_WORLD
 
-σ_bone = 2.0e-2
-σ_tranverse_muscle = 0.107
-σ_fat = 4.07e-2
-σ_skin = 4.88e-4
-σ_cnt = 0.9135
-σ_eco = 1e-5
+# Conductivities in S/mm
+σ_bone = 2.0e-2 / 1000
+σ_tranverse_muscle = 0.107 / 1000
+σ_fat = 4.07e-2 / 1000
+σ_skin = 4.88e-4 / 1000
+σ_cnt = 49.49 / 1000
+σ_eco = 1e-8 / 1000
 
 mesh_data = gmshio.read_from_msh(msh_file, comm, 0, gdim=2)
 
@@ -37,6 +40,8 @@ mesh = mesh_data.mesh
 cell_tags = mesh_data.cell_tags
 facet_tags = mesh_data.facet_tags
 groups = mesh_data.physical_groups
+
+print("Groups:", groups)
 
 tdim = mesh.topology.dim
 fdim = tdim - 1
@@ -51,10 +56,7 @@ bone_cells = cell_tags.find(groups["Bone"].tag)
 muscle_cells = cell_tags.find(groups["Muscle"].tag)
 fat_cells = cell_tags.find(groups["Fat"].tag)
 skin_cells = cell_tags.find(groups["Skin"].tag)
-cnt_cells = np.hstack((
-    cell_tags.find(groups["Conductor_Array"].tag),
-    cell_tags.find(groups["Ground"].tag)
-))
+cnt_cells = cell_tags.find(groups["Conductor_Array"].tag)
 eco_cells = cell_tags.find(groups["Substrate"].tag)
 
 σ.x.array[bone_cells] = σ_bone
@@ -65,33 +67,71 @@ eco_cells = cell_tags.find(groups["Substrate"].tag)
 σ.x.array[eco_cells] = σ_eco
 
 Is.x.array[:] = 0.0
-Is.x.array[muscle_cells] = 1.0    # A/m^3
+
+cell_centers = compute_midpoints(mesh, tdim, muscle_cells)[:, :2]
+
+x_plus = np.array([20.0, 0.0])
+x_minus = np.array([24.0, 0.0])
+sigma_s = 0.1
+I0 = 1.0e-8     # A/mm^3
+
+r2_plus  = np.sum((cell_centers - x_plus)**2, axis=1)
+r2_minus = np.sum((cell_centers - x_minus)**2, axis=1)
+
+Is_vals = I0 * (
+    np.exp(-r2_plus / (2*sigma_s**2)) -
+    np.exp(-r2_minus / (2*sigma_s**2))
+)
+
+print("Max |Is_vals|:", np.max(np.abs(Is_vals)) if len(Is_vals) > 0 else 0.0)
+print("Min distance to x_plus:", np.min(np.sqrt(r2_plus)) if len(r2_plus) > 0 else "None")
+print("Min distance to x_minus:", np.min(np.sqrt(r2_minus)) if len(r2_minus) > 0 else "None")
+
+Is.x.array[muscle_cells] = Is_vals
 
 ground_facets = facet_tags.find(groups["Ground"].tag)
 
-mesh.topology.create_connectivity(fdim, tdim)
-facet_to_cell = mesh.topology.connectivity(fdim, tdim)
-
-ground_boundary_facets = [f for f in ground_facets if len(facet_to_cell.links(f)) == 1]
-ground_facets = np.array(ground_boundary_facets, dtype=np.int32)
-
 V = functionspace(mesh, ("Lagrange", 1))
-
+"""
+dof0 = np.array([0], dtype=np.int32)
+bc_gauge = dirichletbc(
+    default_scalar_type(0.0),
+    dof0,
+    V
+)
+"""
 ground_dofs = locate_dofs_topological(V, fdim, ground_facets)
-ground_bc = dirichletbc(0.0, ground_dofs, V)
+bc_gauge = dirichletbc(0.0, ground_dofs, V)
 
 u, v = TrialFunction(V), TestFunction(V)
 a = inner(σ * grad(u), grad(v)) * dx
 L = Is * v * dx
 
+print("Number of muscle cells:", len(muscle_cells))
+print("Muscle cell centers min:", np.min(cell_centers, axis=0) if len(cell_centers) > 0 else "None")
+print("Muscle cell centers max:", np.max(cell_centers, axis=0) if len(cell_centers) > 0 else "None")
+
 problem = LinearProblem(
     a,
     L,
-    bcs=[ground_bc],
+    bcs=[bc_gauge],
     petsc_options={"ksp_type": "preonly", "pc_type": "lu"},
     petsc_options_prefix="Poisson",
 )
 uh = problem.solve()
+
+results_folder = Path("/home/itunz/Work/MScProj")
+results_folder.mkdir(exist_ok=True, parents=True)
+filename = results_folder / "2d_parview"
+with XDMFFile(mesh.comm, filename.with_suffix(".xdmf"), "w") as xdmf:
+    xdmf.write_mesh(mesh)
+    xdmf.write_function(uh)
+
+u_vals = uh.x.array.real
+
+print("V min:", np.min(u_vals))
+print("V max:", np.max(u_vals))
+print("Any NaN:", np.isnan(u_vals).any())
 
 
 mesh.topology.create_connectivity(tdim, tdim)
