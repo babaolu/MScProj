@@ -14,7 +14,7 @@ from dolfinx.io import XDMFFile, gmsh as gmshio
 from dolfinx.plot import vtk_mesh
 from dolfinx.mesh import compute_midpoints
 
-from ufl import SpatialCoordinate, TestFunction, TrialFunction, dx, grad, inner
+from ufl import SpatialCoordinate, TestFunction, TrialFunction, Measure, dx, grad, inner
 
 from mpi4py import MPI
 
@@ -133,6 +133,33 @@ print("V min:", np.min(u_vals))
 print("V max:", np.max(u_vals))
 print("Any NaN:", np.isnan(u_vals).any())
 
+ds = Measure("ds", domain=mesh, subdomain_data=facet_tags)
+
+electrode_voltages = {}
+
+for i in range(16):
+    name = f"E{i}"
+    tag = groups[name].tag
+
+    # Integral of potential over electrode
+    integral_u = assemble_scalar(form(uh * ds(tag)))
+    integral_u = mesh.comm.allreduce(integral_u, op=MPI.SUM)
+
+    # Electrode length (measure of boundary)
+    electrode_area = assemble_scalar(form(1.0 * ds(tag)))
+    electrode_area = mesh.comm.allreduce(electrode_area, op=MPI.SUM)
+
+    if electrode_area > 0:
+        V_avg = integral_u / electrode_area
+    else:
+        V_avg = 0.0
+
+    electrode_voltages[name] = V_avg
+
+if mesh.comm.rank == 0:
+    print("\nElectrode Voltages (Volts):")
+    for k, v in electrode_voltages.items():
+        print(f"{k}: {v:.6e}")
 
 mesh.topology.create_connectivity(tdim, tdim)
 u_topology, u_cell_types, u_geometry = vtk_mesh(V)
