@@ -31,7 +31,7 @@ comm = MPI.COMM_WORLD
 σ_tranverse_muscle = 0.107 / 1000
 σ_fat = 4.07e-2 / 1000
 σ_skin = 4.88e-4 / 1000
-σ_cnt = 49.49 / 1000
+σ_cnt = 4.21 # 49.49 / 1000
 σ_eco = 1e-8 / 1000
 
 mesh_data = gmshio.read_from_msh(msh_file, comm, 0, gdim=2)
@@ -72,20 +72,29 @@ cell_centers = compute_midpoints(mesh, tdim, muscle_cells)[:, :2]
 
 x_plus = np.array([20.0, 0.0])
 x_minus = np.array([24.0, 0.0])
+
+x1_plus = np.array([0.0, 22.0])
+x1_minus = np.array([0.0, 28.0])
+
 sigma_s = 0.1
 I0 = 1.0e-8     # A/mm^3
 
-r2_plus  = np.sum((cell_centers - x_plus)**2, axis=1)
-r2_minus = np.sum((cell_centers - x_minus)**2, axis=1)
+r_plus  = np.sum((cell_centers - x_plus)**2, axis=1)
+r_minus = np.sum((cell_centers - x_minus)**2, axis=1)
+
+r1_plus  = np.sum((cell_centers - x1_plus)**2, axis=1)
+r1_minus = np.sum((cell_centers - x1_minus)**2, axis=1)
 
 Is_vals = I0 * (
-    np.exp(-r2_plus / (2*sigma_s**2)) -
-    np.exp(-r2_minus / (2*sigma_s**2))
+    np.exp(-r_plus / (2*sigma_s**2)) -
+    np.exp(-r_minus / (2*sigma_s**2))
+    + np.exp(-r1_plus / (2*sigma_s**2)) -
+    np.exp(-r1_minus / (2*sigma_s**2))
 )
 
 print("Max |Is_vals|:", np.max(np.abs(Is_vals)) if len(Is_vals) > 0 else 0.0)
-print("Min distance to x_plus:", np.min(np.sqrt(r2_plus)) if len(r2_plus) > 0 else "None")
-print("Min distance to x_minus:", np.min(np.sqrt(r2_minus)) if len(r2_minus) > 0 else "None")
+print("Min distance to x_plus:", np.min(np.sqrt(r_plus)) if len(r_plus) > 0 else "None")
+print("Min distance to x_minus:", np.min(np.sqrt(r_minus)) if len(r_minus) > 0 else "None")
 
 Is.x.array[muscle_cells] = Is_vals
 

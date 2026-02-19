@@ -2,6 +2,7 @@ import gmsh
 import numpy as np
 
 gmsh.initialize()
+gmsh.option.setNumber("Mesh.CharacteristicLengthFactor", 0.05)
 gmsh.model.add("forearm_electrode")
 
 #Define forearm geometry (mm)
