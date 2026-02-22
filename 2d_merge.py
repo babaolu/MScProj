@@ -6,17 +6,17 @@ gmsh.option.setNumber("Mesh.CharacteristicLengthFactor", 0.05)
 gmsh.model.add("forearm_electrode")
 
 #Define forearm geometry (mm)
-r = 45			# Radius of forearm
+r = 42			# Radius of forearm
 R_bone = r * np.sqrt(0.107)
-R_muscle = r * np.sqrt(0.612 + 0.107)
-R_fat = r * np.sqrt(0.223 + 0.612 + 0.107)
+R_muscle = r * np.sqrt(0.611 + 0.107)
+R_fat = r * np.sqrt(0.222 + 0.611 + 0.107)
 R_skin = r
 
 # Band dimensions (mm)
-L0 = 2 * np.pi * 30
-t = 1		# Band thickness
-Ed = 7
-Et = 0.02
+L0 = 2 * np.pi * 28
+t = 2.0		# Band thickness
+Ed = 8.0
+Et = 0.4
 count = 16
 IED = (L0 - (Ed * count))/count
 

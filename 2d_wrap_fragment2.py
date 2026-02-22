@@ -7,20 +7,20 @@ gmsh.option.setNumber("Mesh.CharacteristicLengthFactor", 0.05)
 gmsh.model.add("forearm_electrode")
 
 # Dimensions (mm)
-r = 45.0
+r = 42.0
 R_bone = r * np.sqrt(0.107)              # ~14.7 mm
-R_muscle = r * np.sqrt(0.612 + 0.107)    # ~38.0 mm
-R_fat = r * np.sqrt(0.223 + 0.612 + 0.107) # ~43.0 mm (Wait, check math)
+R_muscle = r * np.sqrt(0.611 + 0.107)    # ~38.0 mm
+R_fat = r * np.sqrt(0.222 + 0.611 + 0.107) # ~43.0 mm (Wait, check math)
 # Let's trust your original ratios, but R_fat must be < R_skin (45)
 # Sqrt(0.942) * 45 = 43.6 mm. Correct.
 R_skin = r
 
 # Band Dimensions
-t = 1.0
+t = 2.0
 Ed = 8.0
-Et = 0.1
+Et = 0.4
 count = 16
-L0 = 2 * np.pi * 40
+L0 = 2 * np.pi * 28
 IED = (L0 - (Ed * count))/count
 theta_e = Ed / R_skin
 theta_gap = IED / R_skin
@@ -89,7 +89,7 @@ tissue_inputs = [(2, skin_ring), (2, fat_ring), (2, muscle_ring), (2, bone)]
 
 # 3. Fragment (The Glue)
 # This merges the boundaries so they share nodes.
-ov, ovv = gmsh.model.occ.fragment(tissue_inputs + all_devices, [])
+ov, ovv = gmsh.model.occ.fragment(tissue_inputs + all_devices, [], removeObject=False)
 gmsh.model.occ.synchronize()
 
 

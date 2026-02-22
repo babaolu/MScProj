@@ -28,7 +28,7 @@ comm = MPI.COMM_WORLD
 
 # Conductivities in S/mm
 σ_bone = 2.0e-2 / 1000
-σ_tranverse_muscle = 0.107 / 1000
+σ_muscle = 0.3 / 1000
 σ_fat = 4.07e-2 / 1000
 σ_skin = 4.88e-4 / 1000
 σ_cnt = 4.21 # 49.49 / 1000
@@ -60,7 +60,7 @@ cnt_cells = cell_tags.find(groups["Conductor_Array"].tag)
 eco_cells = cell_tags.find(groups["Substrate"].tag)
 
 σ.x.array[bone_cells] = σ_bone
-σ.x.array[muscle_cells] = σ_tranverse_muscle
+σ.x.array[muscle_cells] = σ_muscle
 σ.x.array[fat_cells] = σ_fat
 σ.x.array[skin_cells] = σ_skin
 σ.x.array[cnt_cells] = σ_cnt
@@ -76,8 +76,8 @@ x_minus = np.array([24.0, 0.0])
 x1_plus = np.array([0.0, 22.0])
 x1_minus = np.array([0.0, 28.0])
 
-sigma_s = 0.1
-I0 = 1.0e-8     # A/mm^3
+sigma_s = 12
+I0 = 7.0e-6     # A/mm^3
 
 r_plus  = np.sum((cell_centers - x_plus)**2, axis=1)
 r_minus = np.sum((cell_centers - x_minus)**2, axis=1)
@@ -86,10 +86,10 @@ r1_plus  = np.sum((cell_centers - x1_plus)**2, axis=1)
 r1_minus = np.sum((cell_centers - x1_minus)**2, axis=1)
 
 Is_vals = I0 * (
-    np.exp(-r_plus / (2*sigma_s**2)) -
-    np.exp(-r_minus / (2*sigma_s**2))
-    + np.exp(-r1_plus / (2*sigma_s**2)) -
-    np.exp(-r1_minus / (2*sigma_s**2))
+    np.exp(-r_plus / (2*sigma_s**2)) #-
+#    np.exp(-r_minus / (2*sigma_s**2))
+#    + np.exp(-r1_plus / (2*sigma_s**2)) -
+#    np.exp(-r1_minus / (2*sigma_s**2))
 )
 
 print("Max |Is_vals|:", np.max(np.abs(Is_vals)) if len(Is_vals) > 0 else 0.0)

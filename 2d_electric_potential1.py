@@ -18,7 +18,7 @@ import numpy as np
 import ufl
 from dolfinx import fem, plot, default_scalar_type
 from dolfinx.fem import form
-from dolfinx.io import gmshio, XDMFFile
+from dolfinx.io import gmsh as gmshio, XDMFFile
 from dolfinx.fem.petsc import LinearProblem
 import pyvista
 
@@ -43,7 +43,18 @@ E_rigid = 1.1E+20
 μ_rigid = E_rigid / (2.0 * (1.0 + ν_rigid))
 λ_rigid = E_rigid * ν_rigid / ((1.0 + ν_rigid) * (1.0 - 2.0 * ν_rigid))
 
-msh, cell_tags, facet_tags = gmshio.read_from_msh(msh_file, comm, 0, gdim=2)
+mesh_data = gmshio.read_from_msh(msh_file, comm, 0, gdim=2)
+
+print("Mesh Data:", mesh_data)
+
+msh = mesh_data.mesh 
+cell_tags = mesh_data.cell_tags
+facet_tags = mesh_data.facet_tags
+physical_groups = mesh_data.physical_groups
+
+print("Cell tags:", cell_tags)
+print("Facet tags:", facet_tags)
+print("Physical groups:", physical_groups)
 
 tdim = msh.topology.dim
 fdim = tdim - 1
@@ -112,7 +123,8 @@ problem = LinearProblem(
     a,
     L,
     bcs=bcs,
-    petsc_options={"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"}
+    petsc_options={"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"},
+    petsc_options_prefix="linear_elasticity"
 )
 uh = problem.solve()
 """

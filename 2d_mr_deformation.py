@@ -69,17 +69,23 @@ gdim = msh.geometry.dim
 V0 = fem.functionspace(msh, ("DG", 0))
 λ = fem.Function(V0)
 μ = fem.Function(V0)
+C10 = fem.Function(V0)
+C01 = fem.Function(V0)
 
 for cell_id, tag in enumerate(cell_tags.values):
-    if tag == 9:
+    if tag == physical_groups["Substrate"].tag:
         λ.x.array[cell_id] = λ_eco
-        μ.x.array[cell_id] = μ_eco
-    elif tag == 10:
+        C10.x.array[cell_id] = μ_eco / 4.0   # example split; C10 + C01 = mu_eco/2
+        C01.x.array[cell_id] = μ_eco / 4.0
+    elif tag ==  physical_groups["Conductor_Array"].tag:
         λ.x.array[cell_id] = λ_cnt
-        μ.x.array[cell_id] = μ_cnt
+        C10.x.array[cell_id] = μ_cnt / 4.0   # example split; C10 + C01 = mu_eco/2
+        C01.x.array[cell_id] = μ_cnt / 4.0
+
     else:  # All other forearm tissues rigid
         λ.x.array[cell_id] = λ_rigid
-        μ.x.array[cell_id] = μ_rigid
+        C10.x.array[cell_id] = μ_rigid / 4.0   # example split; C10 + C01 = mu_eco/2
+        C01.x.array[cell_id] = μ_rigid / 4.0
 
 print("Values: ", facet_tags.values)
 print("Facet dim:", facet_tags.dim)
@@ -110,17 +116,21 @@ def σ(u):
 dx = ufl.dx
 ds = ufl.Measure("ds", domain=msh, subdomain_data=facet_tags)
 
-# --- 1. Define Kinematics for Large Deformation ---
+# --- 1. Define Kinematics (plane-strain consistent) ---
 I = ufl.variable(ufl.Identity(gdim))
-F = ufl.variable(I + ufl.grad(u))             # Deformation Gradient
-C = ufl.variable(F.T * F)                     # Right Cauchy-Green Tensor
+F = ufl.variable(I + ufl.grad(u))
+C = ufl.variable(F.T * F)
 Ic = ufl.variable(ufl.tr(C))
-J_det = ufl.variable(ufl.det(F))              # Volume ratio (Jacobian)
+J_det = ufl.variable(ufl.det(F))
 
-# --- 2. Define Neo-Hookean Energy Density ---
-# PSI = (mu / 2) * (Ic - 3) - mu * ln(J) + (lambda / 2) * (ln(J))^2
-psi = (μ / 2) * (Ic - gdim) - μ * ufl.ln(J_det) + (λ / 2) * (ufl.ln(J_det))**2
+I1 = ufl.variable(Ic + 1.0)                                   # 3D I1 with F33=1
+I2 = ufl.variable((Ic**2 - ufl.tr(C * C))/2.0 + Ic)          # 3D I2 with F33=1
 
+# --- 2. Mooney-Rivlin energy (exactly recovers your Neo-Hookean when C01=0) ---
+psi = (C10 * (I1 - 3.0) +
+       C01 * (I2 - 3.0) -
+       (2.0 * C10 + 4.0 * C01) * ufl.ln(J_det) +
+       (λ / 2.0) * (ufl.ln(J_det))**2)
 # --- 3. Derive Stress (First Piola-Kirchhoff) ---
 # We take the derivative of energy w.r.t F to get stress
 P = ufl.diff(psi, F)

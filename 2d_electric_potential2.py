@@ -28,9 +28,9 @@ msh_file = "2d_forearm_electrode.msh"
 comm = MPI.COMM_WORLD
 
 # (mm, Pa,)
-L0 = 2 * np.pi * 30	# Band length 
+L0 = 2 * np.pi * 28	# Band length 
 t = 1		# Band thickness
-r = 45			# Radius of forearm
+r = 42			# Radius of forearm
 ν_eco = 0.49
 E_eco = 68947.6		# Modulus
 μ_eco = E_eco / (2.0 * (1.0 + ν_eco))
@@ -61,6 +61,7 @@ physical_groups = mesh_data.physical_groups
 print("Cell tags:", cell_tags)
 print("Facet tags:", facet_tags)
 print("Physical groups:", physical_groups)
+contact_tag = physical_groups["Top"].tag
 
 tdim = msh.topology.dim
 fdim = tdim - 1
@@ -102,17 +103,17 @@ right_facets = facet_tags.find(12)
 left_dofs = fem.locate_dofs_topological(V, fdim, left_facets)
 right_dofs = fem.locate_dofs_topological(V, fdim, right_facets)
 
-u_left = np.array([L0 / 2, 2 * r], dtype=default_scalar_type)
-#u_left = np.array([0, 0], dtype=default_scalar_type)
-u_right = np.array([-L0 / 2, 2 * r], dtype=default_scalar_type)
-#u_right = np.array([-L0/2, 0], dtype=default_scalar_type)
+#u_left = np.array([L0 / 2, 2 * r], dtype=default_scalar_type)
+u_left = np.array([0, 0], dtype=default_scalar_type)
+#u_right = np.array([-L0 / 2, 2 * r], dtype=default_scalar_type)
+u_right = np.array([0, 2 * r], dtype=default_scalar_type)
 
 bc_left = fem.dirichletbc(u_left, left_dofs, V)
 bc_right = fem.dirichletbc(u_right, right_dofs, V)
 
 bcs = [bc_left, bc_right]
 
-ds = ufl.Measure("ds", domain=msh)
+ds = ufl.Measure("ds", domain=msh, subdomain_data=facet_tags)
 
 contact_facets = facet_tags.find(13)
 R_skin = r
@@ -139,7 +140,7 @@ v = ufl.TestFunction(V)
 a = ufl.inner(σ(u), ufl.grad(v)) * ufl.dx
 T = fem.Constant(msh, np.array([0.0] * gdim, dtype=default_scalar_type))
 f = fem.Constant(msh, np.array([0.0] * gdim, dtype=default_scalar_type))
-L = ufl.dot(f, v) * ufl.dx + ufl.dot(T, v) * ds
+L = ufl.dot(f, v) * ufl.dx
 
 # Initial guess (zero)
 u_k = fem.Function(V)
@@ -155,7 +156,7 @@ if not msh.topology.index_map(fdim).size_local:
 facet_to_vertices = msh.topology.connectivity(fdim, 0)
 
 # Utility to compute gap g at contact facets for a given vertex-valued displacement u_vert
-"""def compute_facet_gaps(u_vert_vals):
+def compute_facet_gaps(u_vert_vals):
     # for each contact facet, compute centroid and normal (in-plane), average u at facet vertices,
     # then compute gap = (centroid + u_centroid)·n_unit - R_skin
     gaps = np.zeros(contact_facets.shape, dtype=np.float64)
@@ -165,22 +166,23 @@ facet_to_vertices = msh.topology.connectivity(fdim, 0)
         vs = facet_to_vertices.links(f)
         pts = coords[vs, :]	#(nverts, 2)
         centroid = np.mean(pts, axis=0)
+        uavg = np.mean(u_vert_vals[vs, :2], axis=0)
+        x_curr = centroid + uavg
+
         # normal for circle centered at center:
         nvec = centroid - center
         nlen = np.linalg.norm(nvec)
-        if nlen == 0:
-            n_unit = np.array([0.0, 1.0])
-        else:
-            n_unit = nvec / nlen
+        n_unit = nvec / nlen if nlen > 0 else np.array([0.0, 1.0])
+        
         # average displacement at facet vertices (u_vert_vals is (num_vertices, gdim))
-        uavg = np.mean(u_vert_vals[vs, :2], axis=0)
-        x_plus_u = centroid + uavg
-        gaps[j] = np.dot(x_plus_u - center, n_unit) - R_skin
+        gaps[j] = nlen - R_skin
         normals[j, :] = n_unit
     return gaps, normals
-"""
-r_vec = x - ufl.as_vector(center)
-n_skin = r_vec / ufl.sqrt(ufl.dot(r_vec, r_vec))
+
+x_curr = x + u_k
+r_vec = x_curr - ufl.as_vector(center)
+r_mag = ufl.sqrt(ufl.dot(r_vec, r_vec))
+n_skin = r_vec / r_mag
 gap = ufl.dot(u_k + r_vec, n_skin) - R_skin
 
 # To sample u at vertices, creat a CG1 vector function space (vertex-based)
@@ -204,7 +206,7 @@ for it in range(maxiter):
     u_vert_vals = u_vert.x.array.reshape((-1, gdim))
 
     # --- 2) Compute gaps and normals at candidate contact facets (using centroid approx) ---
-    """gaps, normals = compute_facet_gaps(u_vert_vals)
+    gaps, normals = compute_facet_gaps(u_vert_vals)
     print("Gaps look like: {===> ", gaps, " <===}")
 
     # active set: facets with gap < 0 (penetration)
@@ -221,32 +223,15 @@ for it in range(maxiter):
     active_values[active] = 1
     active_mt = meshtags(msh, fdim, contact_facets, active_values)
     ds_active = ufl.Measure("ds", domain=msh, subdomain_data=active_mt)
-"""
-    # --- 3) Build contact bilinear and linear forms restricte to active set ---
-    # Contact bilinear: rho * (n·u)(n·v) integrated on active facets
-    # Note: ufl.dot(u,n) gives scalar, ufl.dot(v,n) scalar, multiply them
-    # a_contact = rho * ufl.inner(ufl.dot(u, n), ufl.dot(v, n)) * ds_active(1)
-     a_contact = rho * ufl.inner(ufl.dot(u, n_skin), ufl.dot(v, n_skin)) * ds(contact_tag)
-    # contact linear: (lambda + rho*g) * (v·n) on active facets
-    # Need a UFL expression for g (gap function) - We approximate using facetwise average 'g' we computed:
-    # Simplest approach: use mean of g over active facets as a scalar in the RHS (cheap approx).
-    # For better accuracy, build a facet DG0 function storing g per facet and use it in UFL (more code).
-   """ if n_active > 0:
-        g_mean = float(np.mean(gaps[active]))
-    else:
-        g_mean = 0.0
-    # Lambda_values array maps to contact facets; create lambda_mean for RHS
-    lambda_vals_active = lambda_vals.copy()
-    lambda_vals_active[~active] = 0.0
-    if n_active > 0:
-        lambda_mean = float(np.mean(lambda_vals_active[active]))
-    else:
-        lambda_mean = 0.0
-"""
-    # L_contact = (lambda_mean + rho * g_mean) * ufl.dot(v, n) * ds_active(1)
-	L_contact = rho * ufl.inner(gap * n_skin, ufl.dot(v, n_skin)) * ds(contact_tag)
 
-    # --- 4) assemble total problem and solve linear system ---
+    # --- 3) Build contact bilinear and linear forms restricted to active set ---
+    # a_contact = rho * ufl.inner(ufl.dot(u, n_skin), ufl.dot(v, n_skin)) * ds(contact_tag)
+    a_contact = rho * ufl.inner(ufl.dot(u, n_skin), ufl.dot(v, n_skin)) * ds_active(1)
+
+    #L_contact = rho * ufl.inner(gap * n_skin, ufl.dot(v, n_skin)) * ds(contact_tag)
+    # Both arguments are now scalars
+    L_contact = rho * (R_skin - r_mag + ufl.dot(u_k, n_skin)) * ufl.dot(v, n_skin) * ds_active(1)
+    # --- 4) Assemble total problem and solve linear system ---
     a_total = a + a_contact
     L_total = L + L_contact
     
@@ -258,7 +243,6 @@ for it in range(maxiter):
         petsc_options_prefix="linear_elasticity",
     )
     u_new = problem.solve()
-
     # --- 5) Update lambda per contact facet: lambda <- max(0, lambda + rho*(g - u_new·n)) ---
     u_vert_new = fem.Function(V_vert)
     try:
@@ -328,7 +312,7 @@ sigma_dev = σ(uh) - (1.0 / 3) * ufl.tr(σ(uh)) * ufl.Identity(len(uh))
 sigma_vm = ufl.sqrt((3.0 / 2) * ufl.inner(sigma_dev, sigma_dev))
 
 W = fem.functionspace(msh, ("DG", 0))
-sigma_vm_expr = fem.Expression(sigma_vm, W.element.interpolation_points())
+sigma_vm_expr = fem.Expression(sigma_vm, W.element.interpolation_points)
 sigma_vm_h = fem.Function(W)
 sigma_vm_h.interpolate(sigma_vm_expr)
 sigma_vm_h.name = "σ"

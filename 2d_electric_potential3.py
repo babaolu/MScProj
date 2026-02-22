@@ -28,9 +28,9 @@ msh_file = "2d_forearm_electrode.msh"
 comm = MPI.COMM_WORLD
 
 # (mm, Pa,)
-L0 = 2 * np.pi * 30	# Band length 
+L0 = 2 * np.pi * 28	# Band length 
 t = 1		# Band thickness
-r = 45			# Radius of forearm
+r = 42			# Radius of forearm
 ν_eco = 0.49
 E_eco = 68947.6		# Modulus
 μ_eco = E_eco / (2.0 * (1.0 + ν_eco))
@@ -45,7 +45,7 @@ E_rigid = 1.1E+20
 λ_rigid = E_rigid * ν_rigid / ((1.0 + ν_rigid) * (1.0 - 2.0 * ν_rigid))
 
 # Penalty/Augmented Lagrangian parameters
-rho = 1E+6		# Penalty parameter (tune E/h scale)
+rho = 1E+9		# Penalty parameter (tune E/h scale)
 tol = 1E-6		# Convergence tolerance on displacement updates
 maxiter = 40
 
@@ -102,10 +102,10 @@ right_facets = facet_tags.find(12)
 left_dofs = fem.locate_dofs_topological(V, fdim, left_facets)
 right_dofs = fem.locate_dofs_topological(V, fdim, right_facets)
 
-u_left = np.array([L0 / 2, 2 * r], dtype=default_scalar_type)
-#u_left = np.array([0, 0], dtype=default_scalar_type)
-u_right = np.array([-L0 / 2, 2 * r], dtype=default_scalar_type)
-#u_right = np.array([-L0/2, 0], dtype=default_scalar_type)
+#u_left = np.array([L0 / 2, 2 * r], dtype=default_scalar_type)
+u_left = np.array([0, 0], dtype=default_scalar_type)
+#u_right = np.array([-L0 / 2, 2 * r], dtype=default_scalar_type)
+u_right = np.array([0, r], dtype=default_scalar_type)
 
 bc_left = fem.dirichletbc(u_left, left_dofs, V)
 bc_right = fem.dirichletbc(u_right, right_dofs, V)
@@ -114,7 +114,7 @@ bcs = [bc_left, bc_right]
 
 ds = ufl.Measure("ds", domain=msh, subdomain_data=facet_tags)
 
-contact_tag = physical_groups["Skin_Electrode"].tag
+contact_tag = physical_groups["Top"].tag
 print("Contact_tag:", contact_tag)
 
 contact_facets = facet_tags.find(contact_tag)
@@ -220,13 +220,14 @@ for it in range(maxiter):
 
     #lambda_vals[:] = np.maximum(0.0, lambda_vals + rho * g_val)
 
-    # compute convergence measure
-    du = np.linalg.norm(u_new.x.array)
-    print(f"ALM iter {it}: ||u||={du:.3e}")
+# === 3. Better convergence check (replace the old one) ===
+    diff = u_new.x.array - u_k.x.array
+    norm_diff = np.linalg.norm(diff)
+    print(f"iter {it:2d} | ||du|| = {norm_diff:.2e} | ||u|| = {np.linalg.norm(u_new.x.array):.3f} mm")
     u_k.x.array[:] = u_new.x.array[:]
 
-    if du < tol:
-        print("ALM converged.")
+    if norm_diff < tol:
+        print("✅ Converged nicely!")
         break
 
 # final solution is u_k
