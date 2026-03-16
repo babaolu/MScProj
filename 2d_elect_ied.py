@@ -74,9 +74,9 @@ x_plus = np.array([20.0, 0.0])
 x_minus = np.array([24.0, 0.0])
 
 x1_plus = np.array([0.0, 22.0])
-x1_minus = np.array([0.0, 25.0])
+x1_minus = np.array([0.0, 28.0])
 
-sigma_s = 0.4
+sigma_s = 0.05
 I0 = 7.0e-6     # A/mm^3
 
 r_plus  = np.sum((cell_centers - x_plus)**2, axis=1)
@@ -165,11 +165,20 @@ for i in range(16):
 
     electrode_voltages[name] = V_avg
 
+text_path = "ied.txt"
+selected = []
+for i in ["E0", "E5", "E10", "E15"]:
+    selected.append(electrode_voltages[i])
+
+with open(text_path, 'a') as file:
+    file.write(str(selected).strip("[]"))
+    file.write("\n")
+
 if mesh.comm.rank == 0:
     print("\nElectrode Voltages (Volts):")
     for k, v in electrode_voltages.items():
         print(f"{k}: {v:.6e}")
-
+"""
 mesh.topology.create_connectivity(tdim, tdim)
 u_topology, u_cell_types, u_geometry = vtk_mesh(V)
 
@@ -180,4 +189,4 @@ u_plotter = pyvista.Plotter()
 u_plotter.add_mesh(u_grid, show_edges=True)
 u_plotter.view_xy()
 if not pyvista.OFF_SCREEN:
-    u_plotter.show()
+    u_plotter.show()"""
