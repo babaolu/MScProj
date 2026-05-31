@@ -4,5 +4,5 @@
 *.xdmf
 out_*/
 2d_electric_potential.py.bk
-np_array.txt
 .*
+*.txt
